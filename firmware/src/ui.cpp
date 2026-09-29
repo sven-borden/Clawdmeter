@@ -299,6 +299,49 @@ static lv_color_t pct_color(float pct) {
     return COL_GREEN;
 }
 
+// Bar color mode, selected at build time (-DBAR_COLOR_MODE=1 in build_flags):
+//   0 (default) - classic: both bars use pct_color() above (50 / 80).
+//   1 - 5h bar uses SESSION_AMBER_PCT / SESSION_RED_PCT (75 / 90 default);
+//       weekly bar is pace-based: blue = behind, green = within
+//       +/- WEEKLY_PACE_BAND_PCT of the elapsed share of the week, amber = ahead.
+#ifndef BAR_COLOR_MODE
+#define BAR_COLOR_MODE 0
+#endif
+#ifndef SESSION_AMBER_PCT
+#define SESSION_AMBER_PCT 75.0f
+#endif
+#ifndef SESSION_RED_PCT
+#define SESSION_RED_PCT 90.0f
+#endif
+#ifndef WEEKLY_PACE_BAND_PCT
+#define WEEKLY_PACE_BAND_PCT 5.0f
+#endif
+#define WEEK_MINS (7 * 24 * 60)
+#define COL_BLUE lv_color_hex(0x6cb6e8)
+
+static lv_color_t session_bar_color(float pct) {
+#if BAR_COLOR_MODE == 1
+    if (pct > SESSION_RED_PCT) return COL_RED;
+    if (pct >= SESSION_AMBER_PCT) return COL_AMBER;
+    return COL_GREEN;
+#else
+    return pct_color(pct);
+#endif
+}
+
+static lv_color_t weekly_bar_color(float used_pct, int reset_mins) {
+#if BAR_COLOR_MODE == 1
+    if (reset_mins < 0) return pct_color(used_pct);   // no reset info: plain %
+    if (reset_mins > WEEK_MINS) reset_mins = WEEK_MINS;
+    float elapsed_pct = 100.0f * (WEEK_MINS - reset_mins) / WEEK_MINS;
+    if (used_pct > elapsed_pct + WEEKLY_PACE_BAND_PCT) return COL_AMBER;
+    if (used_pct < elapsed_pct - WEEKLY_PACE_BAND_PCT) return COL_BLUE;
+    return COL_GREEN;
+#else
+    (void)reset_mins;
+    return pct_color(used_pct);
+#endif
+}
 static void format_reset_time(int mins, char* buf, size_t len) {
     if (mins < 0) {
         snprintf(buf, len, "---");
@@ -651,7 +694,7 @@ void ui_update(const UsageData* data) {
     }
 
     lv_bar_set_value(bar_session, s_pct, LV_ANIM_ON);
-    lv_obj_set_style_bg_color(bar_session, pct_color(data->session_pct), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(bar_session, session_bar_color(data->session_pct), LV_PART_INDICATOR);
 
     if (data->enterprise) {
         // Period box: time % + dynamic pace color + "Resets <date>" label
@@ -669,7 +712,8 @@ void ui_update(const UsageData* data) {
         int w_pct = (int)(data->weekly_pct + 0.5f);
         lv_label_set_text_fmt(lbl_weekly_pct, "%d%%", w_pct);
         lv_bar_set_value(bar_weekly, w_pct, LV_ANIM_ON);
-        lv_obj_set_style_bg_color(bar_weekly, pct_color(data->weekly_pct), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(bar_weekly,
+            weekly_bar_color(data->weekly_pct, data->weekly_reset_mins), LV_PART_INDICATOR);
         format_reset_time(data->weekly_reset_mins, buf, sizeof(buf));
         lv_label_set_text(lbl_weekly_reset, buf);
     }
