@@ -23,6 +23,25 @@ The device boots into the splash. Tap the screen anywhere to switch to the Usage
 
 While the splash is up, the middle (PWR) button cycles animations. **Hold the power button for 3 seconds, then release, to put the device into pairing mode** — this clears the saved Bluetooth bond and re-advertises. The firmware also auto-rotates animations every 20 s within the current usage-rate group, so a long stretch on the splash isn't just one Clawd on loop.
 
+### Usage bar colors
+
+Two color schemes are available, chosen at build time with `BAR_COLOR_MODE`:
+
+| Mode | 5h session bar | Weekly bar |
+| :--- | :--- | :--- |
+| `0` (default, classic) | green below 50%, amber 50-79%, red 80%+ | same thresholds |
+| `1` (pace-based) | green below 75%, amber 75-90%, red above 90% | compared with how much of the 7-day week has elapsed: **blue** = behind pace, **green** = within 5 points of pace, **amber** = ahead |
+
+For example, with 2.5 days until the weekly reset, 64% of the week has elapsed: 70% used shows amber, 30% shows blue, and 62% shows green. If the daemon has not reported a reset time yet, the weekly bar falls back to the classic percentage colors.
+
+Enable mode 1 by adding a flag to your board env's `build_flags` in `firmware/platformio.ini`, or for a one-off build:
+
+```bash
+PLATFORMIO_BUILD_FLAGS="-DBAR_COLOR_MODE=1" pio run -d firmware -e waveshare_amoled_216 -t upload
+```
+
+On Windows PowerShell, set `$env:PLATFORMIO_BUILD_FLAGS = "-DBAR_COLOR_MODE=1"` first. The mode-1 thresholds can be tuned with `-DSESSION_AMBER_PCT=75.0f`, `-DSESSION_RED_PCT=90.0f` and `-DWEEKLY_PACE_BAND_PCT=5.0f`.
+
 ## Hardware
 
 Boards supported out of the box:
