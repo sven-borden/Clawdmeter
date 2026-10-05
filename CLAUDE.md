@@ -166,6 +166,8 @@ The firmware ships a `screenshot` serial command that dumps the LVGL framebuffer
 
 The boot screen is `SCREEN_SPLASH` and only advances on a physical button press, so a fresh flash will sit on the splash. To screenshot the screen you're actually editing without asking the user to press a button, **temporarily change the default boot screen** in `main.cpp` (search for `ui_show_screen(SCREEN_SPLASH);`) to `SCREEN_USAGE` / `SCREEN_CONTROLLER` / `SCREEN_BLUETOOTH`, do your iteration, then revert before committing.
 
+**`TICK_MODE` (opt-in pace ticks on the Pro/Max usage bars, see README) is `#if`'d out of default builds**, so default builds, the sim, and screenshots never exercise it. When touching usage-bar code in `ui.cpp`, also build (and ideally screenshot) with `PLATFORMIO_BUILD_FLAGS=-DTICK_MODE=1` so mode 1 doesn't rot unnoticed.
+
 ## Critical gotchas
 
 1. **CO5300 cannot rotate.** Its MADCTL only supports axis flips, not column/row exchange. Rotation is done by **CPU pixel remapping inside `display_hal_draw_bitmap`** in `boards/waveshare_amoled_216/display.cpp`. We use **PARTIAL render mode with strip rotation** (small 480×40 strips, fast). On rotation change → AMOLED brightness flash → force redraw (handled inside `display_hal_tick`).

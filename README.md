@@ -30,17 +30,17 @@ Two schemes are available, chosen at build time with `TICK_MODE`:
 | Mode | 5h session and weekly bars |
 | :--- | :--- |
 | `0` (default, classic) | green below 50%, amber 50-79%, red 80%+ |
-| `1` (pace ticks) | a tick marks how much of the window (5 hours / 7 days) has elapsed: **green** = at or behind pace, **amber** = ahead of pace |
+| `1` (pace ticks) | a tick marks how much of the window (5 hours / 7 days) has elapsed: **green** = at or behind pace, **amber** = ahead of pace, **red** = limit reached (100%) |
 
-For example, with 2.5 days until the weekly reset, 64% of the week has elapsed, so the weekly tick sits at 64%: 30% or 62% used shows green, 70% shows amber. The 5h bar works the same way: 3 hours before its reset, the tick sits at 40%. If the daemon has not reported a reset time, that bar's tick is hidden and it falls back to the classic colors.
+For example, with 2.5 days until the weekly reset, 64% of the week has elapsed, so the weekly tick sits at 64%: 30% or 62% used shows green, 70% shows amber. Usage within one point of the tick (65% here) still counts as on pace. The 5h bar works the same way: 3 hours before its reset, the tick sits at 40%. When a countdown reaches 0 the tick sits at the end of the bar; if the daemon sends no reset time at all, that bar's tick is hidden and it uses the classic colors. Enterprise accounts keep their own bars in both modes.
 
-Enable mode 1 by adding a flag to your board env's `build_flags` in `firmware/platformio.ini`, or for a one-off build:
+Enable mode 1 by adding `-DTICK_MODE=1` under `build_flags =` in your board's `[env:...]` block in `firmware/platformio.ini`, or for a one-off build:
 
 ```bash
 PLATFORMIO_BUILD_FLAGS="-DTICK_MODE=1" pio run -d firmware -e waveshare_amoled_216 -t upload
 ```
 
-On Windows PowerShell, set `$env:PLATFORMIO_BUILD_FLAGS = "-DTICK_MODE=1"` first.
+On Windows PowerShell, set `$env:PLATFORMIO_BUILD_FLAGS = "-DTICK_MODE=1"` first. It stays set for the rest of the session, so every later build gets mode 1 too; clear it with `Remove-Item Env:PLATFORMIO_BUILD_FLAGS`.
 
 ## Hardware
 

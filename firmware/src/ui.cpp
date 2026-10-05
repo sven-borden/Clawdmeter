@@ -299,10 +299,12 @@ static lv_color_t pct_color(float pct) {
     return COL_GREEN;
 }
 
-// Pace ticks, selected at build time (-DTICK_MODE=1 in build_flags):
-//   0 (default) - classic: both bars use pct_color() above (50 / 80).
-//   1 - each Pro/Max bar gets a tick at the elapsed share of its window (5h /
-//       7 days), and the fill is green at or behind that pace, amber ahead of it.
+// Bar fill scheme, selected at build time (-DTICK_MODE=1 in build_flags):
+//   0 (default) - classic: Pro/Max bars use pct_color() above (50 / 80).
+//   1 - pace ticks: each Pro/Max bar gets a tick at the elapsed share of its
+//       window (5h / 7 days); the fill is green at or behind the tick, amber
+//       ahead of it, red only once the limit is hit. A bar with no reset time
+//       gets no tick and falls back to pct_color(). Enterprise is unaffected.
 #ifndef TICK_MODE
 #define TICK_MODE 0
 #endif
@@ -310,30 +312,41 @@ static lv_color_t pct_color(float pct) {
 #define WEEK_MINS    (7 * 24 * 60)
 
 #if TICK_MODE
+#define PACE_TICK_W    6      // 2 px ivory core between two PACE_TICK_EDGE borders
+#define PACE_TICK_EDGE 2
+// Daemons send whole percents while elapsed is fractional: usage within a point
+// of the tick visually touches it, so it still reads as on pace (green).
+#define PACE_GRACE_PCT 1.0f
+
 static lv_obj_t* tick_session = nullptr;   // pace markers over the two bars
 static lv_obj_t* tick_weekly  = nullptr;
 
-// Share of a usage window already elapsed (0..100), or -1 when the reset time
-// is unknown (the daemon sends 0 then). This is where usage would be if spread
-// evenly over the window.
+// Share of a usage window already elapsed (0..100): where usage would sit if
+// spread evenly over the window. -1 when the reset time is unknown (the parser
+// defaults a missing "sr"/"wr" to -1). The daemons send 0 once the countdown
+// runs out (heartbeat replays clamp to 0 until the next poll), and also for a
+// missing reset header; either way the label reads "Resets in 0m", so 0 counts
+// as a fully elapsed window to match it.
 static float window_elapsed_pct(int reset_mins, int window_mins) {
-    if (reset_mins <= 0) return -1.0f;
+    if (reset_mins < 0) return -1.0f;
+    // Host clock skew or rounding can put the countdown past the window length.
     if (reset_mins > window_mins) reset_mins = window_mins;
     return 100.0f * (window_mins - reset_mins) / window_mins;
 }
 
 // Ivory core with panel-colored side borders, so the tick stays crisp over
-// both the colored fill and the empty track. Overhangs the bar slightly.
+// both the colored fill and the empty track. Overhangs the bar slightly, and
+// is created after the bar so it draws on top.
 static lv_obj_t* make_pace_tick(lv_obj_t* panel) {
     int overhang = L.bar_h / 5;
     lv_obj_t* tick = lv_obj_create(panel);
     lv_obj_remove_style_all(tick);
-    lv_obj_set_size(tick, 6, L.bar_h + 2 * overhang);
+    lv_obj_set_size(tick, PACE_TICK_W, L.bar_h + 2 * overhang);
     lv_obj_set_pos(tick, 0, L.usage_bar_y - overhang);
     lv_obj_set_style_bg_color(tick, COL_TEXT, 0);
     lv_obj_set_style_bg_opa(tick, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(tick, COL_PANEL, 0);
-    lv_obj_set_style_border_width(tick, 2, 0);
+    lv_obj_set_style_border_width(tick, PACE_TICK_EDGE, 0);
     lv_obj_set_style_border_side(tick,
         (lv_border_side_t)(LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_RIGHT), 0);
     lv_obj_clear_flag(tick, LV_OBJ_FLAG_CLICKABLE);
@@ -341,32 +354,38 @@ static lv_obj_t* make_pace_tick(lv_obj_t* panel) {
     return tick;
 }
 
-// Center the tick on elapsed_pct along the bar; hide it when that's unknown.
+// Center the tick on elapsed_pct along the bar, clamped to stay within the bar
+// ends; hide it when elapsed is unknown.
 static void place_pace_tick(lv_obj_t* tick, float elapsed_pct) {
     if (elapsed_pct < 0) {
         lv_obj_add_flag(tick, LV_OBJ_FLAG_HIDDEN);
         return;
     }
     int bar_w = L.content_w - 2 * L.panel_pad_x;
-    int tw = lv_obj_get_width(tick);
-    int x = (int)(elapsed_pct * bar_w / 100.0f + 0.5f) - tw / 2;
+    int x = (int)(elapsed_pct * bar_w / 100.0f + 0.5f) - PACE_TICK_W / 2;
     if (x < 0) x = 0;
-    if (x > bar_w - tw) x = bar_w - tw;
+    if (x > bar_w - PACE_TICK_W) x = bar_w - PACE_TICK_W;
     lv_obj_set_x(tick, x);
     lv_obj_clear_flag(tick, LV_OBJ_FLAG_HIDDEN);
 }
 #endif
 
+// Fill color for a usage bar: pace-based in TICK_MODE when the reset time is
+// known, otherwise pct_color().
 static lv_color_t bar_color(float used_pct, int reset_mins, int window_mins) {
 #if TICK_MODE
     float elapsed_pct = window_elapsed_pct(reset_mins, window_mins);
-    if (elapsed_pct >= 0) return used_pct > elapsed_pct ? COL_AMBER : COL_GREEN;
+    if (elapsed_pct >= 0) {
+        if (used_pct >= 100.0f) return COL_RED;   // limit hit
+        return used_pct > elapsed_pct + PACE_GRACE_PCT ? COL_AMBER : COL_GREEN;
+    }
 #else
     (void)reset_mins;
     (void)window_mins;
 #endif
     return pct_color(used_pct);
 }
+
 static void format_reset_time(int mins, char* buf, size_t len) {
     if (mins < 0) {
         snprintf(buf, len, "---");
@@ -752,7 +771,8 @@ void ui_update(const UsageData* data) {
     }
 
 #if TICK_MODE
-    // Pace ticks: Pro/Max bars only; the enterprise boxes have their own pace line.
+    // Pace ticks: Pro/Max only. On Enterprise the Period bar's fill already is
+    // the elapsed share, and its label carries the Under/On/Over pace text.
     place_pace_tick(tick_session, data->enterprise ? -1.0f :
                     window_elapsed_pct(data->session_reset_mins, SESSION_MINS));
     place_pace_tick(tick_weekly, data->enterprise ? -1.0f :
