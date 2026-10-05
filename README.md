@@ -30,9 +30,9 @@ Two color schemes are available, chosen at build time with `BAR_COLOR_MODE`:
 | Mode | 5h session bar | Weekly bar |
 | :--- | :--- | :--- |
 | `0` (default, classic) | green below 50%, amber 50-79%, red 80%+ | same thresholds |
-| `1` (pace-based) | green below 75%, amber 75-90%, red above 90% | compared with how much of the 7-day week has elapsed: **blue** = behind pace, **green** = within 5 points of pace, **amber** = ahead |
+| `1` (pace-based) | green below 75%, amber 75-90%, red above 90% | a tick marks how much of the 7-day week has elapsed: **green** = at or behind pace, **amber** = ahead of pace |
 
-For example, with 2.5 days until the weekly reset, 64% of the week has elapsed: 70% used shows amber, 30% shows blue, and 62% shows green. If the daemon has not reported a reset time yet, the weekly bar falls back to the classic percentage colors.
+For example, with 2.5 days until the weekly reset, 64% of the week has elapsed, so the tick sits at 64%: 30% or 62% used shows green, 70% shows amber. If the daemon has not reported a reset time yet, the tick is hidden and the weekly bar falls back to the classic percentage colors.
 
 Enable mode 1 by adding a flag to your board env's `build_flags` in `firmware/platformio.ini`, or for a one-off build:
 
@@ -40,7 +40,7 @@ Enable mode 1 by adding a flag to your board env's `build_flags` in `firmware/pl
 PLATFORMIO_BUILD_FLAGS="-DBAR_COLOR_MODE=1" pio run -d firmware -e waveshare_amoled_216 -t upload
 ```
 
-On Windows PowerShell, set `$env:PLATFORMIO_BUILD_FLAGS = "-DBAR_COLOR_MODE=1"` first. The mode-1 thresholds can be tuned with `-DSESSION_AMBER_PCT=75.0f`, `-DSESSION_RED_PCT=90.0f` and `-DWEEKLY_PACE_BAND_PCT=5.0f`.
+On Windows PowerShell, set `$env:PLATFORMIO_BUILD_FLAGS = "-DBAR_COLOR_MODE=1"` first. The mode-1 session thresholds can be tuned with `-DSESSION_AMBER_PCT=75.0f` and `-DSESSION_RED_PCT=90.0f`.
 
 ## Hardware
 

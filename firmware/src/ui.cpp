@@ -302,8 +302,8 @@ static lv_color_t pct_color(float pct) {
 // Bar color mode, selected at build time (-DBAR_COLOR_MODE=1 in build_flags):
 //   0 (default) - classic: both bars use pct_color() above (50 / 80).
 //   1 - 5h bar uses SESSION_AMBER_PCT / SESSION_RED_PCT (75 / 90 default);
-//       weekly bar is pace-based: blue = behind, green = within
-//       +/- WEEKLY_PACE_BAND_PCT of the elapsed share of the week, amber = ahead.
+//       weekly bar is pace-based: a tick marks the elapsed share of the week,
+//       and the fill is green at or behind that pace, amber ahead of it.
 #ifndef BAR_COLOR_MODE
 #define BAR_COLOR_MODE 0
 #endif
@@ -313,11 +313,7 @@ static lv_color_t pct_color(float pct) {
 #ifndef SESSION_RED_PCT
 #define SESSION_RED_PCT 90.0f
 #endif
-#ifndef WEEKLY_PACE_BAND_PCT
-#define WEEKLY_PACE_BAND_PCT 5.0f
-#endif
 #define WEEK_MINS (7 * 24 * 60)
-#define COL_BLUE lv_color_hex(0x6cb6e8)
 
 static lv_color_t session_bar_color(float pct) {
 #if BAR_COLOR_MODE == 1
@@ -329,14 +325,23 @@ static lv_color_t session_bar_color(float pct) {
 #endif
 }
 
+#if BAR_COLOR_MODE == 1
+static lv_obj_t* tick_weekly = nullptr;   // pace marker over bar_weekly
+
+// Share of the 7-day window already elapsed (0..100), or -1 when the reset
+// time is unknown. This is where usage would be if spread evenly over the week.
+static float week_elapsed_pct(int reset_mins) {
+    if (reset_mins < 0) return -1.0f;
+    if (reset_mins > WEEK_MINS) reset_mins = WEEK_MINS;
+    return 100.0f * (WEEK_MINS - reset_mins) / WEEK_MINS;
+}
+#endif
+
 static lv_color_t weekly_bar_color(float used_pct, int reset_mins) {
 #if BAR_COLOR_MODE == 1
-    if (reset_mins < 0) return pct_color(used_pct);   // no reset info: plain %
-    if (reset_mins > WEEK_MINS) reset_mins = WEEK_MINS;
-    float elapsed_pct = 100.0f * (WEEK_MINS - reset_mins) / WEEK_MINS;
-    if (used_pct > elapsed_pct + WEEKLY_PACE_BAND_PCT) return COL_AMBER;
-    if (used_pct < elapsed_pct - WEEKLY_PACE_BAND_PCT) return COL_BLUE;
-    return COL_GREEN;
+    float elapsed_pct = week_elapsed_pct(reset_mins);
+    if (elapsed_pct < 0) return pct_color(used_pct);   // no reset info: plain %
+    return used_pct > elapsed_pct ? COL_AMBER : COL_GREEN;
 #else
     (void)reset_mins;
     return pct_color(used_pct);
@@ -572,6 +577,26 @@ static void init_usage_screen(lv_obj_t* scr) {
     // Recolor enabled so enterprise period box can color pace and reset separately
     lv_label_set_recolor(lbl_weekly_reset, true);
 
+#if BAR_COLOR_MODE == 1
+    // Pace tick: ivory core with panel-colored side borders, so it stays crisp
+    // over both the colored fill and the empty track. Overhangs the bar slightly.
+    {
+        int overhang = L.bar_h / 5;
+        tick_weekly = lv_obj_create(panel_weekly);
+        lv_obj_remove_style_all(tick_weekly);
+        lv_obj_set_size(tick_weekly, 6, L.bar_h + 2 * overhang);
+        lv_obj_set_pos(tick_weekly, 0, L.usage_bar_y - overhang);
+        lv_obj_set_style_bg_color(tick_weekly, COL_TEXT, 0);
+        lv_obj_set_style_bg_opa(tick_weekly, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(tick_weekly, COL_PANEL, 0);
+        lv_obj_set_style_border_width(tick_weekly, 2, 0);
+        lv_obj_set_style_border_side(tick_weekly,
+            (lv_border_side_t)(LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_RIGHT), 0);
+        lv_obj_clear_flag(tick_weekly, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(tick_weekly, LV_OBJ_FLAG_HIDDEN);
+    }
+#endif
+
     build_pair_group(usage_container);
     build_idle_group(usage_container);
 
@@ -717,6 +742,22 @@ void ui_update(const UsageData* data) {
         format_reset_time(data->weekly_reset_mins, buf, sizeof(buf));
         lv_label_set_text(lbl_weekly_reset, buf);
     }
+
+#if BAR_COLOR_MODE == 1
+    // Pace tick: Pro/Max weekly bar only, and only once a reset time is known.
+    float elapsed = data->enterprise ? -1.0f : week_elapsed_pct(data->weekly_reset_mins);
+    if (elapsed < 0) {
+        lv_obj_add_flag(tick_weekly, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        int bar_w = L.content_w - 2 * L.panel_pad_x;
+        int tw = lv_obj_get_width(tick_weekly);
+        int x = (int)(elapsed * bar_w / 100.0f + 0.5f) - tw / 2;
+        if (x < 0) x = 0;
+        if (x > bar_w - tw) x = bar_w - tw;
+        lv_obj_set_x(tick_weekly, x);
+        lv_obj_clear_flag(tick_weekly, LV_OBJ_FLAG_HIDDEN);
+    }
+#endif
 }
 
 // Pick the usage-view sub-screen: pairing hint (BLE down), the idle "Zzz" screen
