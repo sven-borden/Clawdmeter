@@ -29,6 +29,18 @@
 # Set it >= poll_interval to disable.
 # heartbeat_interval = 60
 
+# Renew an expired login automatically (macOS daemon). Claude Code only renews
+# its ~8-hour access token when the `claude` CLI runs, so if you work only in the
+# Claude desktop app the device drops to "No data" once the token lapses. With
+# this on, the daemon runs one tiny `claude -p` request (Haiku, a few tokens of
+# usage) when it sees an expired token; Claude Code renews the token as part of
+# that run, and the daemon polls again straight away. At most one attempt per
+# 30 minutes per config dir, so a login that really has ended (re-run
+# `claude login`) doesn't trigger a CLI run every poll.
+#   off = never run the CLI; wait until you use it yourself (default)
+#   on  = renew automatically
+# auto_renew = off
+
 # Play a sound on the device when your 5-hour session limit resets, so you know
 # you can use Claude again without watching the screen.
 #   off = silent (default)

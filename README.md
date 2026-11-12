@@ -85,6 +85,8 @@ launchctl unload ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist  # st
 launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # start
 ```
 
+The token in the Keychain lasts about 8 hours, and Claude Code only renews it when the `claude` CLI runs. If you mostly use the Claude desktop app, the display drops to "No data" (log: `API HTTP 401`) once it lapses. Run any `claude` command to fix that, or set `auto_renew = on` in `~/.config/claude-usage-monitor/config` and the daemon runs one tiny `claude -p` request (Haiku) to renew it whenever it expires (see `daemon/config.example`).
+
 ## Linux installation
 
 ### Flash the firmware

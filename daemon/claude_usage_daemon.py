@@ -17,6 +17,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -57,7 +58,9 @@ API_BODY = {
 class TokenExpired(Exception):
     """Raised by poll_api on a 401/403 — the access token is dead. The daemon never
     refreshes (pure free-ride: Claude Code owns refreshing), so the caller just
-    signals "No data" to the device until the CLI re-seeds the token."""
+    signals "No data" to the device until the CLI re-seeds the token. With the
+    opt-in ``auto_renew = on`` it first asks the claude CLI to do that re-seed
+    (see renew_token_via_cli) — Claude Code still does the actual refresh."""
 
 
 def log(msg: str) -> None:
@@ -190,6 +193,120 @@ def read_token_for(config_dir: Path) -> str | None:
     if sys.platform == "darwin" and config_dir == DEFAULT_CONFIG_DIR:
         return _read_token_keychain()
     return None
+
+
+# --- opt-in self-renew via the claude CLI ------------------------------------
+#
+# The access token lasts ~8 h and only Claude Code renews it, which happens
+# when the `claude` CLI runs. Someone who works only in the desktop app never
+# runs it, so the stored token lapses and the device shows "No data" until they
+# do. With `auto_renew = on`, a 401 makes the daemon run one minimal
+# `claude -p` request (Claude Code renews the token as part of it) and re-poll.
+# The daemon itself still never calls the OAuth refresh endpoint, so Claude
+# Code stays the token's only refresher and there's no rotation race.
+
+RENEW_PROMPT = "Reply with just: ok"
+RENEW_TIMEOUT = 120.0
+RENEW_COOLDOWN = 30 * 60  # min seconds between renew attempts per config dir
+_renew_attempts: dict[Path, float] = {}
+
+
+def read_auto_renew_setting() -> str:
+    """Read the `auto_renew` option from the config file. One of: off|on.
+
+    Defaults to "off" (never run the CLI) so existing setups are unaffected
+    until the user opts in.
+    """
+    try:
+        if CONFIG_FILE.exists():
+            for line in CONFIG_FILE.read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                if key.strip().lower() == "auto_renew":
+                    val = val.strip().lower()
+                    if val in ("off", "on"):
+                        return val
+    except OSError:
+        pass
+    return "off"
+
+
+def find_claude_cli() -> str | None:
+    """Locate the `claude` binary. launchd's PATH omits ~/.local/bin (where the
+    native installer puts it), so the standard install spots are checked too."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    for cand in (
+        Path.home() / ".local" / "bin" / "claude",
+        Path.home() / ".claude" / "local" / "claude",
+    ):
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return str(cand)
+    return None
+
+
+async def renew_token_via_cli(config_dir: Path) -> bool:
+    """Have the claude CLI renew ``config_dir``'s expired token. True if it ran OK.
+
+    Opt-in (``auto_renew = on``) and limited to one attempt per RENEW_COOLDOWN
+    per dir, so a dead login (expired refresh token) or a network outage doesn't
+    spawn a CLI run every poll.
+    """
+    if read_auto_renew_setting() != "on":
+        return False
+    now = time.monotonic()
+    last = _renew_attempts.get(config_dir)
+    if last is not None and now - last < RENEW_COOLDOWN:
+        return False
+    _renew_attempts[config_dir] = now
+
+    cli = find_claude_cli()
+    if not cli:
+        log("auto_renew: `claude` CLI not found; can't renew the token")
+        return False
+    env = os.environ.copy()
+    if config_dir == DEFAULT_CONFIG_DIR:
+        env.pop("CLAUDE_CONFIG_DIR", None)
+    else:
+        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    # Minimal run: cheapest model, no tools/MCP/slash commands, no saved session,
+    # and a neutral cwd so no project CLAUDE.md or settings load. Not --bare: it
+    # skips Keychain reads, so it couldn't renew a macOS login.
+    args = [
+        cli, "-p", "--model", "haiku", "--no-session-persistence",
+        "--tools", "", "--strict-mcp-config", "--disable-slash-commands",
+        RENEW_PROMPT,
+    ]
+    log(f"Token in {config_dir} expired; asking the claude CLI to renew it")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=tempfile.gettempdir(),
+            env=env,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as e:
+        log(f"auto_renew: couldn't start the claude CLI: {e}")
+        return False
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=RENEW_TIMEOUT)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        log(f"auto_renew: claude CLI timed out after {RENEW_TIMEOUT:.0f}s")
+        return False
+    if proc.returncode != 0:
+        lines = (err or out or b"").decode(errors="replace").strip().splitlines()
+        detail = lines[-1] if lines else "no output"
+        log(f"auto_renew: claude CLI failed (rc={proc.returncode}): {detail}")
+        return False
+    log("auto_renew: claude CLI ran; re-reading the token")
+    return True
 
 
 def load_cached_address() -> str | None:
@@ -538,6 +655,20 @@ class PlanSelector:
 _SELECTOR = PlanSelector()
 
 
+async def _poll_dir(config_dir: Path, token: str) -> dict | None:
+    """poll_api for one config dir. With auto_renew on, a 401 gets one claude CLI
+    renewal and a re-poll with the renewed token before it counts as dead."""
+    try:
+        return await poll_api(token)
+    except TokenExpired:
+        if not await renew_token_via_cli(config_dir):
+            raise
+    token = read_token_for(config_dir)
+    if not token:
+        raise TokenExpired()
+    return await poll_api(token)
+
+
 async def poll_active(selector: PlanSelector = _SELECTOR) -> tuple[dict | None, bool]:
     """Poll every configured config dir; return ``(active_payload, all_dead)``.
 
@@ -552,6 +683,8 @@ async def poll_active(selector: PlanSelector = _SELECTOR) -> tuple[dict | None, 
 
     Pure free-ride: a 401 (TokenExpired) means that dir's token has expired and
     only Claude Code (its owner) can re-seed it — we never refresh it ourselves.
+    With ``auto_renew = on`` we ask the claude CLI to re-seed it once first
+    (see _poll_dir).
     """
     dirs = read_config_dirs()
     payloads: dict[Path, dict] = {}
@@ -563,7 +696,7 @@ async def poll_active(selector: PlanSelector = _SELECTOR) -> tuple[dict | None, 
             log(f"No token in {d}; skipping")
             continue
         try:
-            payload = await poll_api(token)
+            payload = await _poll_dir(d, token)
         except TokenExpired:
             log(f"Token in {d} expired/invalid; skipping")
             continue
@@ -765,7 +898,8 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                 # refreshing; refreshing here would race its rotation and feed the
                 # OAuth endpoint's rate limit (429). When no dir has a usable token
                 # we signal "No data" so the device idles instead of holding stale
-                # numbers until the CLI re-seeds it.
+                # numbers until the CLI re-seeds it (with auto_renew on,
+                # poll_active has already asked the CLI to do that).
                 payload, dead = await poll_active()
                 if payload is not None:
                     if await session.write_payload(payload):
